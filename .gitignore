@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual env
+.venv/
+env/
+venv/
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# FastAPI / media output
+/media/*.wav
+/media/*.mp3
+/media/*.m4a
+/media/*.ogg
+
+# Local environment
+.env
+.env.local
+*.secret
+
+# OneDrive temp files
+~$*
+*.tmp
+
+# Node-like cache (just in case)
+node_modules/
+
+# Build/artifacts
+dist/
+build/
+.env
+*.env
+.env.*
+.env
+*.env
+.env.*
+.env
+*.env
+.env.*
+.env
+*.env
+.env.*
+.env
+*.env
+.env.*

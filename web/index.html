@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="af">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Boereoorlog Personas – Volleskerm</title>
+  <style>
+    :root{
+      /* Tweak these if D-ID UI spacing changes on your account */
+      --crop-top:    72px;   /* hides Share/Create/header area */
+      --crop-bottom: 96px;   /* hides “Build your own agent with D-ID” footer */
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%; margin:0; background:#000}
+    /* Fullscreen viewport that crops the iframe neatly */
+    #didViewport{
+      position:relative;
+      height:100vh;
+      width:100vw;
+      overflow:hidden;
+      background:#000;
+    }
+    #didFrame{
+      position:relative;
+      top: calc(-1 * var(--crop-top));
+      height: calc(100% + var(--crop-top) + var(--crop-bottom));
+      width:100%;
+      border:0;
+      background:#000;
+    }
+
+    /* Minimal floating toolbar for persona choice (can be hidden) */
+    #toolbar{
+      position:fixed;
+      top:14px; left:14px;
+      display:flex; gap:8px; align-items:center;
+      background:rgba(15,15,15,.55);
+      backdrop-filter: blur(6px);
+      border-radius:12px; padding:8px 10px;
+      z-index:10;
+    }
+    #toolbar label{color:#d1d5db; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial}
+    #persona{
+      color:#111; background:#fff; border-radius:10px; border:0;
+      padding:8px 10px; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial
+    }
+
+    /* Optional: hover-to-show toolbar (comment out if you prefer always visible) */
+    #toolbar{opacity:.95; transition:opacity .25s}
+    #toolbar:hover{opacity:1}
+  </style>
+</head>
+<body>
+  <!-- Floating persona selector -->
+  <div id="toolbar" title="Kies ’n persona">
+    <label for="persona">Persona</label>
+    <select id="persona">
+      <option value="boer_commando_jan_du_preez" selected>Jan du Preez</option>
+      <option value="afrikaner_woman_camp_anna_van_der_merwe">Anna van der Merwe</option>
+      <option value="black_man_with_boers_daniel_kgoathe">Daniel Kgoathe</option>
+      <option value="british_soldier_arthur_jennings">Arthur Jennings</option>
+    </select>
+  </div>
+
+  <!-- Fullscreen, cropped D-ID Agent -->
+  <div id="didViewport">
+    <iframe id="didFrame"
+      allow="camera; microphone; clipboard-read; clipboard-write; autoplay"
+      referrerpolicy="no-referrer">
+    </iframe>
+  </div>
+
+  <script>
+    const personaEl = document.getElementById('persona');
+    const didFrame  = document.getElementById('didFrame');
+
+    // Persona → D-ID Agent share URLs
+    const DID_AGENT_SHARE = {
+      "black_man_with_boers_daniel_kgoathe":
+        "https://studio.d-id.com/agents/share?id=v2_agt_A34nC9jB&utm_source=copy&key=WjI5dloyeGxMVzloZFhSb01ud3hNRGcyT0RFNU9EWTNOakEyTVRRek1UVTRNamc2Vkc1NmRFUmxXazlwTTBreWJqSlZiMmRXTjFjdw==",
+      "british_soldier_arthur_jennings":
+        "https://studio.d-id.com/agents/share?id=v2_agt_PE8dncAF&utm_source=copy&key=WjI5dloyeGxMVzloZFhSb01ud3hNRGcyT0RFNU9EWTNOakEyTVRRek1UVTRNamc2Vkc1NmRFUmxXazlwTTBreWJqSlZiMmRXTjFjdw==",
+      "boer_commando_jan_du_preez":
+        "https://studio.d-id.com/agents/share?id=v2_agt_NbfAWg0O&utm_source=copy&key=WjI5dloyeGxMVzloZFhSb01ud3hNRGcyT0RFNU9EWTNOakEyTVRRek1UVTRNamc2Vkc1NmRFUmxXazlwTTBreWJqSlZiMmRXTjFjdw==",
+      "afrikaner_woman_camp_anna_van_der_merwe":
+        "https://studio.d-id.com/agents/share?id=v2_agt_PXFhspmN&utm_source=copy&key=WjI5dloyeGxMVzloZFhSb01ud3hNRGcyT0RFNU9EWTNOakEyTVRRek1UVTRNamc2Vkc1NmRFUmxXazlwTTBreWJqSlZiMmRXTjFjdw==",
+    };
+
+    function loadAgent() {
+      const url = DID_AGENT_SHARE[personaEl.value];
+      if (url) {
+        didFrame.src = url;
+      } else {
+        didFrame.src = "";
+        alert("Geen D-ID agent vir hierdie persona beskikbaar nie.");
+      }
+    }
+
+    personaEl.addEventListener('change', loadAgent);
+    loadAgent();
+
+    // Optional: handle window resize to keep clean 100vh behavior on mobile address bars
+    window.addEventListener('resize', () => {
+      document.getElementById('didViewport').style.height = window.innerHeight + 'px';
+    });
+  </script>
+</body>
+</html>

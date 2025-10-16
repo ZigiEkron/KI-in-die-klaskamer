@@ -1,0 +1,234 @@
+﻿# app/main.py
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional, Dict
+from pathlib import Path
+from dotenv import load_dotenv
+import os, uuid, traceback, requests
+
+# ----------------------------
+# Load env (project root)
+# ----------------------------
+ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+REPLY_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# TTS provider switch
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "openai").lower().strip()  # "eleven" or "openai"
+
+# ElevenLabs config (optional, only needed if TTS_PROVIDER=eleven)
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
+ELEVEN_VOICE_BY_PERSONA = {
+    "boer_commando_jan_du_preez": os.getenv("ELEVEN_VOICE_ID_JAN", ""),
+    "afrikaner_woman_camp_anna_van_der_merwe": os.getenv("ELEVEN_VOICE_ID_ANNA", ""),
+    "black_man_with_boers_daniel_kgoathe": os.getenv("ELEVEN_VOICE_ID_DANIEL", ""),
+    "british_soldier_arthur_jennings": os.getenv("ELEVEN_VOICE_ID_ARTHUR", ""),
+}
+
+# OpenAI TTS config (used if TTS_PROVIDER=openai)
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "tts-1")  # tts-1 or tts-1-hd
+OPENAI_TTS_VOICE_DEFAULT = os.getenv("OPENAI_TTS_VOICE_DEFAULT", "alloy")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("Please set OPENAI_API_KEY in .env")
+
+# ----------------------------
+# Directories
+# ----------------------------
+MEDIA_DIR = ROOT_DIR / "media"
+WEB_DIR = ROOT_DIR / "web"
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+# ----------------------------
+# App
+# ----------------------------
+app = FastAPI(title="Boer War Personas Bot (Text + TTS + Web)")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+)
+
+# OpenAI client
+from openai import OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# ----------------------------
+# Personas
+# ----------------------------
+PERSONA_NAMES: Dict[str, str] = {
+    "boer_commando_jan_du_preez": "Jan du Preez",
+    "afrikaner_woman_camp_anna_van_der_merwe": "Anna van der Merwe",
+    "black_man_with_boers_daniel_kgoathe": "Daniel Kgoathe",
+    "british_soldier_arthur_jennings": "Private Arthur Jennings",
+}
+
+AFRIKAANS_PERSONAS = {
+    "boer_commando_jan_du_preez",
+    "afrikaner_woman_camp_anna_van_der_merwe",
+    "black_man_with_boers_daniel_kgoathe",
+}
+
+def build_system_prompt(pid: str) -> str:
+    role_map = {
+        "boer_commando_jan_du_preez": "Boer kommandolid tydens die Anglo-Boereoorlog",
+        "afrikaner_woman_camp_anna_van_der_merwe": "Afrikaanse vrou in 'n Britse konsentrasiekamp",
+        "black_man_with_boers_daniel_kgoathe": "Swart man wat saam met die Boere gehelp/geveg het",
+        "british_soldier_arthur_jennings": "British infantryman (Manchester Regiment)",
+    }
+    name = PERSONA_NAMES.get(pid, "Unknown")
+    role = role_map.get(pid, "")
+    base = (
+        f"You are {name} ({role}). Speak in the first person as if it is 1899–1902. "
+        f"Be historically faithful; avoid knowledge after 1902. "
+        f"Admit uncertainty and separate hearsay from events you witnessed."
+    )
+    if pid in AFRIKAANS_PERSONAS:
+        base += "\nIMPORTANT: Antwoord ALTYD in natuurlike Afrikaans met ’n 1900-era toonaard."
+    else:
+        base += "\nIMPORTANT: Reply in natural British English with a 1900 soldier’s tone."
+    return base
+
+def pick_openai_voice(pid: str, emotion: Optional[str]) -> str:
+    """
+    Valid OpenAI voices: nova, shimmer, echo, onyx, fable, alloy, ash, sage, coral
+    """
+    if pid == "afrikaner_woman_camp_anna_van_der_merwe":
+        v = "coral"   # feminine
+    elif pid == "boer_commando_jan_du_preez":
+        v = "onyx"    # deeper male
+    elif pid == "black_man_with_boers_daniel_kgoathe":
+        v = "alloy"   # or "onyx" for deeper
+    elif pid == "british_soldier_arthur_jennings":
+        v = "alloy"
+    else:
+        v = OPENAI_TTS_VOICE_DEFAULT
+    print(f"[TTS:OpenAI] persona={pid} -> voice={v}")
+    return v
+
+# ----------------------------
+# IO models
+# ----------------------------
+class ChatInput(BaseModel):
+    persona_id: str
+    message: str
+    tts: bool = False
+    emotion: Optional[str] = "neutral"
+    avatar: bool = False  # returns structured payload only (no provider call here)
+
+class ChatOut(BaseModel):
+    reply: str
+    audio_url: Optional[str] = None
+    avatar: Optional[dict] = None
+
+# ----------------------------
+# TTS helpers
+# ----------------------------
+def tts_openai_to_file(text: str, pid: str, emotion: Optional[str], out_path: Path) -> None:
+    """
+    Stream OpenAI TTS directly to file.
+    We omit the 'format' arg (the SDK infers from file extension when streaming).
+    """
+    v = pick_openai_voice(pid, emotion)
+    print(f"[TTS:OpenAI] model={OPENAI_TTS_MODEL}, voice={v}, file={out_path.name}")
+    # Use streaming API; extension controls encoding (mp3/wav)
+    with client.audio.speech.with_streaming_response.create(
+        model=OPENAI_TTS_MODEL,
+        voice=v,
+        input=text,
+    ) as resp:
+        resp.stream_to_file(out_path)
+
+def tts_eleven_to_file(text: str, pid: str, out_path: Path) -> None:
+    """
+    ElevenLabs streaming -> file (mp3). Requires ELEVEN_API_KEY and voice_id per persona.
+    """
+    voice_id = ELEVEN_VOICE_BY_PERSONA.get(pid, "")
+    if not ELEVEN_API_KEY or not voice_id:
+        raise RuntimeError(f"ElevenLabs missing key or voice_id for persona {pid}")
+    print(f"[TTS:Eleven] voice_id={voice_id} -> {out_path.name}")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    headers = {
+        "xi-api-key": ELEVEN_API_KEY,
+        "accept": "audio/mpeg",               # mp3 stream
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",  # good Afrikaans
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.85,
+            "style": 0.35,
+            "use_speaker_boost": True
+        }
+    }
+    with requests.post(url, headers=headers, json=payload, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+# ----------------------------
+# Routes
+# ----------------------------
+@app.post("/chat", response_model=ChatOut)
+def chat(inp: ChatInput):
+    if inp.persona_id not in PERSONA_NAMES:
+        raise HTTPException(400, "Unknown persona_id")
+
+    system_prompt = build_system_prompt(inp.persona_id)
+    try:
+        resp = client.chat.completions.create(
+            model=REPLY_MODEL,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": inp.message.strip()},
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Chat error: {e}")
+
+    reply = (resp.choices[0].message.content or "").strip()
+
+    # --- TTS (provider switch) ---
+    audio_url = None
+    if inp.tts:
+        try:
+            ext = "mp3"  # change to "wav" if you prefer WAV
+            out_path = MEDIA_DIR / f"{uuid.uuid4().hex}.{ext}"
+            if TTS_PROVIDER == "eleven":
+                tts_eleven_to_file(reply, inp.persona_id, out_path)
+            else:
+                tts_openai_to_file(reply, inp.persona_id, inp.emotion, out_path)
+            audio_url = f"/media/{out_path.name}"
+        except Exception as e:
+            print("[TTS] FAILED:", e)
+            traceback.print_exc()
+            audio_url = None
+
+    # --- Avatar payload (for an external provider; we just return data) ---
+    avatar_payload = None
+    if inp.avatar:
+        avatar_payload = {
+            "persona": PERSONA_NAMES[inp.persona_id],
+            "language": "Afrikaans" if inp.persona_id in AFRIKAANS_PERSONAS else "English",
+            "emotion": inp.emotion,
+            "script": reply,
+            "voice_url": audio_url,
+        }
+
+    return ChatOut(reply=reply, audio_url=audio_url, avatar=avatar_payload)
+
+# ----------------------------
+# Static mounts (AFTER routes)
+# ----------------------------
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
+app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
