@@ -51,3 +51,6 @@ build/
 .env
 *.env
 .env.*
+.env
+*.env
+.env.*
